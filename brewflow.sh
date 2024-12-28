@@ -26,16 +26,30 @@ clear
 
 printf "${CYAN}${ROCKET} Welcome to BrewFlow!${RESET}\n"
 
+TOTAL_TIME=0
+
 printf "${CYAN}${PACKAGE} (brew update) ${YELLOW}Fetching Homebrew and package information...${RESET}\n"
+START_TIME=$(date +%s)
 brew update
-printf "${DARK_GREEN}${CHECK_MARK} Brew update completed!${RESET}\n"
+END_TIME=$(date +%s)
+DIFF_TIME=$((END_TIME - START_TIME))
+TOTAL_TIME=$((TOTAL_TIME + DIFF_TIME))
+printf "${DARK_GREEN}${CHECK_MARK} Brew update completed in ${DIFF_TIME} seconds!${RESET}\n"
 
 printf "${CYAN}${WRENCH} (brew upgrade) ${YELLOW}Upgrading outdated packages...${RESET}\n"
+START_TIME=$(date +%s)
 brew upgrade
-printf "${DARK_GREEN}${CHECK_MARK} Brew upgrade completed!${RESET}\n"
+END_TIME=$(date +%s)
+DIFF_TIME=$((END_TIME - START_TIME))
+TOTAL_TIME=$((TOTAL_TIME + DIFF_TIME))
+printf "${DARK_GREEN}${CHECK_MARK} Brew upgrade completed in ${DIFF_TIME} seconds!${RESET}\n"
 
 printf "${CYAN}${CLEANING} (brew cleanup) ${YELLOW}Cleaning up unnecessary files...${RESET}\n"
+START_TIME=$(date +%s)
 brew cleanup
-printf "${DARK_GREEN}${CHECK_MARK} Brew cleanup completed!${RESET}\n"
+END_TIME=$(date +%s)
+DIFF_TIME=$((END_TIME - START_TIME))
+TOTAL_TIME=$((TOTAL_TIME + DIFF_TIME))
+printf "${DARK_GREEN}${CHECK_MARK} Brew cleanup completed in ${DIFF_TIME} seconds!${RESET}\n"
 
-printf "${CYAN}${CHECK_MARK} All processes completed!${RESET}\n"
+printf "${CYAN}${CHECK_MARK} All processes completed in ${TOTAL_TIME} seconds!${RESET}\n"
