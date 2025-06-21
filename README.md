@@ -2,23 +2,31 @@
 
 **BrewFlow** automates routine processes such as updating, upgrading, and cleaning Homebrew. Normally, running these commands manually can be time consuming and cumbersome. With **BrewFlow**, you can quickly and easily execute all of them with a single command.
 
-## Installation
+![GitHub Repo stars](https://img.shields.io/github/stars/yunusemreaydinli/brewflow)
 
-1. Download the `brewflow.sh` file.
-2. Make it executable:
+## ✨ Features
+
+- Real-time timing for each operation
+- Intelligent error handling with `brew doctor`
+- Deep cleanup options
+- Sound notifications on macOS
+- Cross-platform support: macOS, Linux, and WSL
+
+## 🚀 Usage
 
 ```bash
-chmod +x brewflow.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/yunusemreaydinli/brewflow/main/brewflow.sh)
 ```
 
-## Usage
+## 🛠️ What It Does
 
-Run the `brewflow.sh` file from the terminal:
+1. **`brew update`** - Updates Homebrew and fetches latest formulae
+2. **`brew outdated`** - Shows packages that need updating
+3. **`brew upgrade`** - Upgrades all outdated packages
+   - Uses `--greedy` flag on macOS for comprehensive updates
+4. **`brew cleanup --prune=1`** - Optional deep cleanup (removes old downloads)
+5. **`brew doctor`** - Runs diagnostics when errors occur
 
-```bash
-sh brewflow.sh
-```
+## Notice
 
-## Warning
-
-This tool uses brew update, brew upgrade, and brew cleanup. By running it, you accept responsibility for any risks that may arise. Proceed with caution!
+This script runs brew update, upgrade, and may upgrade packages you didn't explicitly choose. Proceed only if you accept this behavior.
