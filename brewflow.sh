@@ -67,6 +67,16 @@ DEBUG_DONE="Brew doctor completed."
 CONTINUE_PROMPT="Continue operation? (Y/n): "
 TOTAL_DURATION_LABEL="Total elapsed time: "
 
+# Upgrade prompts
+STABLE_UPGRADE_INFO="Checking stable outdated packages..."
+GREEDY_UPGRADE_INFO="Checking all outdated packages (including pre-release)..."
+NO_OUTDATED_MSG="No outdated packages found."
+UPGRADE_CONFIRM_PROMPT="Proceed with upgrade? (Y/n): "
+UPGRADE_CHOICE_PROMPT_MACOS="Choose upgrade option:\n  ${GREEN}1)${RESET} Upgrade outdated packages ${LIGHT_GREY}(default)${RESET}\n  ${YELLOW}2)${RESET} Show all packages (including pre-release with --greedy)\nChoice (1-2): "
+UPGRADE_CHOICE_PROMPT_OTHER="Choose upgrade option:\n  ${GREEN}1)${RESET} Upgrade outdated packages ${LIGHT_GREY}(default)${RESET}\nChoice (1): "
+NO_STABLE_CHOICE_PROMPT="No stable packages to upgrade. Check with --greedy?\n  ${YELLOW}1)${RESET} Check for pre-release versions (--greedy) ${LIGHT_GREY}(default)${RESET}\n  ${RED}2)${RESET} Skip upgrade\nChoice (1-2): "
+GREEDY_SELECTION_PROMPT="Choose upgrade option:\n  ${GREEN}1)${RESET} Upgrade only outdated packages ${LIGHT_GREY}(default)${RESET}\n  ${YELLOW}2)${RESET} Upgrade only greedy packages\n  ${ORANGE}3)${RESET} Upgrade all packages\nChoice (1-3): "
+
 # Durations
 update_duration=0
 outdated_duration=0
@@ -203,6 +213,221 @@ run_brew_command() {
     play_sound "$NOTIFY_SUCCESS"
 }
 
+check_and_show_outdated() {
+    local cmd="$1"
+    local info_msg="$2"
+    local emoji="$3"
+    
+    printf "%b ${emoji} ${CYAN}${cmd}${RESET} ${YELLOW}${info_msg}${RESET}\n"
+    local start=$(date +%s)
+    
+    local outdated_output
+    outdated_output=$(bash -c -- "$cmd" 2>&1)
+    local exit_code=$?
+    
+    if [[ $exit_code -ne 0 ]]; then
+        handle_error "Checking outdated packages failed."
+        return 1
+    fi
+    
+    local end=$(date +%s)
+    local duration=$((end - start))
+    outdated_duration=$duration
+    
+    if [[ -z "$outdated_output" || "$outdated_output" =~ ^[[:space:]]*$ ]]; then
+        printf "%b ${CHECK_MARK} ${GREEN}${NO_OUTDATED_MSG} ${DARK_GREY}──────────────────${RESET} ${GREEN}Time: $(format_duration $duration)${RESET}\n"
+        play_sound "$NOTIFY_SUCCESS"
+        return 2
+    else
+        printf "%b ${CHECK_MARK} ${GREEN}Outdated packages found: ${DARK_GREY}──────────────${RESET} ${GREEN}Time: $(format_duration $duration)${RESET}\n"
+        printf "%b\n" "${LIGHT_GREY}${outdated_output}${RESET}\n"
+        play_sound "$NOTIFY_SUCCESS"
+        return 0
+    fi
+}
+
+# Handle greedy selection after showing greedy packages
+handle_greedy_selection() {
+    printf "%b ${ARROW} ${LIGHT_GREY}${GREEDY_SELECTION_PROMPT}${RESET}"
+    
+    while true; do
+        read -r greedy_choice
+        # Default to option 1 if empty
+        if [[ -z "$greedy_choice" ]]; then
+            greedy_choice=1
+        fi
+        case $greedy_choice in
+            1)
+                # Upgrade only outdated packages
+                show_package_selection "brew outdated" "brew upgrade"
+                selection_result=$?
+                if [[ $selection_result -eq 0 ]]; then
+                    # Upgrade all stable packages
+                    run_brew_command "brew upgrade" "$UPGRADE_INFO" "$UPGRADE_SUCCESS" "$ERROR_UPGRADE" "$BUBBLE" upgrade_duration 12
+                elif [[ $selection_result -eq 1 ]]; then
+                    # Skip upgrade
+                    upgrade_duration=0
+                    printf "%b ${YELLOW}Upgrade skipped by user.${RESET}\n"
+                fi
+                # If selection_result is 3, individual package was already upgraded
+                break
+                ;;
+            2)
+                # Upgrade only greedy packages
+                show_package_selection "brew outdated --greedy" "brew upgrade --greedy"
+                selection_result=$?
+                if [[ $selection_result -eq 0 ]]; then
+                    # Upgrade all packages with greedy
+                    run_brew_command "brew upgrade --greedy" "$UPGRADE_GREEDY_INFO" "$UPGRADE_GREEDY_SUCCESS" "$ERROR_UPGRADE" "$BUBBLE" upgrade_duration 21
+                elif [[ $selection_result -eq 1 ]]; then
+                    # Skip upgrade
+                    upgrade_duration=0
+                    printf "%b ${YELLOW}Upgrade skipped by user.${RESET}\n"
+                fi
+                # If selection_result is 3, individual package was already upgraded
+                break
+                ;;
+            3)
+                # Upgrade all packages
+                show_package_selection "brew outdated --greedy" "brew upgrade --greedy"
+                selection_result=$?
+                if [[ $selection_result -eq 0 ]]; then
+                    # Upgrade all packages with greedy
+                    run_brew_command "brew upgrade --greedy" "$UPGRADE_GREEDY_INFO" "$UPGRADE_GREEDY_SUCCESS" "$ERROR_UPGRADE" "$BUBBLE" upgrade_duration 21
+                elif [[ $selection_result -eq 1 ]]; then
+                    # Skip upgrade
+                    upgrade_duration=0
+                    printf "%b ${YELLOW}Upgrade skipped by user.${RESET}\n"
+                fi
+                # If selection_result is 3, individual package was already upgraded
+                break
+                ;;
+            *)
+                printf "%b ${ERROR_SIGN} ${RED}Invalid choice. Please select 1, 2, or 3.${RESET}\n"
+                printf "%b ${ARROW} ${LIGHT_GREY}${GREEDY_SELECTION_PROMPT}${RESET}"
+                ;;
+        esac
+    done
+}
+
+show_package_selection() {
+    local cmd="$1"
+    local upgrade_cmd_base="$2"
+    
+    # Get list of outdated packages with versions - make sure to use --verbose
+    local verbose_cmd
+    if [[ "$cmd" == *"--greedy"* ]]; then
+        verbose_cmd="brew outdated --greedy --verbose"
+    else
+        verbose_cmd="brew outdated --verbose"
+    fi
+    
+    local outdated_output
+    outdated_output=$(bash -c -- "$verbose_cmd" 2>/dev/null)
+    
+    if [[ -z "$outdated_output" ]]; then
+        return 2
+    fi
+    
+    # Convert to arrays for package names and full info
+    local packages=()
+    local package_info=()
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            local package_name=$(echo "$line" | awk '{print $1}')
+            packages+=("$package_name")
+            package_info+=("$line")
+        fi
+    done <<< "$outdated_output"
+    
+    printf "%b\n${CYAN}${BOLD}Select packages to upgrade:${RESET}\n"
+    printf "%b  ${GREEN}0)${RESET} All packages ${LIGHT_GREY}(default)${RESET}\n"
+    
+    local i=1
+    for info in "${package_info[@]}"; do
+        printf "%b  ${YELLOW}%d)${RESET} %s\n" "" "$i" "$info"
+        ((i++))
+    done
+    printf "%b  ${RED}%d)${RESET} Skip upgrade\n" "" "$i"
+    
+    printf "%b\n${ARROW} ${LIGHT_GREY}Choice (0-%d or multiple like '1 2 3'): ${RESET}" "" "$i"
+    read -r package_choice
+    
+    # Default to option 0 if empty
+    if [[ -z "$package_choice" ]]; then
+        package_choice=0
+    fi
+    
+    if [[ "$package_choice" == "0" ]]; then
+        # Upgrade all packages
+        return 0
+    elif [[ "$package_choice" == "$i" ]]; then
+        # Skip upgrade
+        return 1
+    else
+        # Handle multiple selections or single selection
+        local selected_packages=()
+        local valid_choices=()
+        
+        # Split input by spaces and validate each choice
+        for choice in $package_choice; do
+            if [[ "$choice" -ge 1 && "$choice" -lt "$i" ]]; then
+                selected_packages+=("${packages[$((choice-1))]}")
+                valid_choices+=("$choice")
+            else
+                printf "%b ${ERROR_SIGN} ${RED}Invalid choice: %s. Please select numbers between 1-%d.${RESET}\n" "" "$choice" "$((i-1))"
+                show_package_selection "$cmd" "$upgrade_cmd_base"
+                return
+            fi
+        done
+        
+        if [[ ${#selected_packages[@]} -eq 0 ]]; then
+            printf "%b ${ERROR_SIGN} ${RED}No valid packages selected.${RESET}\n"
+            show_package_selection "$cmd" "$upgrade_cmd_base"
+            return
+        fi
+        
+        # Upgrade selected packages one by one
+        local start=$(date +%s)
+        local all_success=true
+        
+        for package in "${selected_packages[@]}"; do
+            printf "%b ${BUBBLE} ${CYAN}${upgrade_cmd_base} ${package}${RESET} ${YELLOW}Upgrading ${package}...${RESET}\n"
+            if ! bash -c -- "${upgrade_cmd_base} ${package}"; then
+                handle_error "Upgrading ${package} failed."
+                all_success=false
+            else
+                printf "%b ${CHECK_MARK} ${GREEN}${package} upgraded successfully.${RESET}\n"
+            fi
+        done
+        
+        local end=$(date +%s)
+        upgrade_duration=$((end - start))
+        
+        if [[ "$all_success" == true ]]; then
+            local dashes=$(printf '─%.0s' $(seq 1 12))
+            printf "%b ${CHECK_MARK} ${GREEN}Selected packages upgraded successfully. ${DARK_GREY}${dashes}${RESET} ${GREEN}Time: $(format_duration $upgrade_duration)${RESET}\n"
+            play_sound "$NOTIFY_SUCCESS"
+        else
+            printf "%b ${WARNING} ${YELLOW}Some packages failed to upgrade. Check output above.${RESET}\n"
+        fi
+        
+        return 3
+    fi
+}
+
+prompt_upgrade_choice() {
+    printf "%b ${ARROW} ${LIGHT_GREY}${UPGRADE_CONFIRM_PROMPT}${RESET}"
+    read -r user_input
+    user_input=$(echo "$user_input" | tr '[:upper:]' '[:lower:]')
+    
+    if [[ "$user_input" == "" || "$user_input" == "y" || "$user_input" == "yes" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 
 print_header() {
     clear
@@ -235,20 +460,157 @@ print_header
 print_commands_header
 
 run_brew_command "brew update" "$UPDATE_INFO" "$UPDATE_SUCCESS" "$ERROR_UPDATE" "$CHECK_MARK" update_duration 9
-run_brew_command "brew outdated" "$OUTDATED_INFO" "$OUTDATED_SUCCESS" "$ERROR_OUTDATED" "$MAGNIFY" outdated_duration 17
 
-# Use --greedy only on macOS
-if [[ "$(uname)" == "Darwin" ]]; then
-    upgrade_cmd="brew upgrade --greedy"
-    upgrade_info="$UPGRADE_GREEDY_INFO"
-    upgrade_success="$UPGRADE_GREEDY_SUCCESS"
-    run_brew_command "$upgrade_cmd" "$upgrade_info" "$upgrade_success" "$ERROR_UPGRADE" "$BUBBLE" upgrade_duration 21
-else
-    upgrade_cmd="brew upgrade"
-    upgrade_info="$UPGRADE_INFO"
-    upgrade_success="$UPGRADE_SUCCESS"
-    run_brew_command "$upgrade_cmd" "$upgrade_info" "$upgrade_success" "$ERROR_UPGRADE" "$BUBBLE" upgrade_duration 12
+# First, check stable outdated packages
+check_and_show_outdated "brew outdated --verbose" "$STABLE_UPGRADE_INFO" "$MAGNIFY"
+check_result=$?
+
+if [[ $check_result -eq 2 ]]; then
+    # No outdated packages found
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # Only ask about greedy on macOS
+        printf "%b ${ARROW} ${LIGHT_GREY}${NO_STABLE_CHOICE_PROMPT}${RESET}"
+        
+        while true; do
+            read -r no_stable_choice
+            # Default to option 1 if empty
+            if [[ -z "$no_stable_choice" ]]; then
+                no_stable_choice=1
+            fi
+            case $no_stable_choice in
+                1)
+                    # Check greedy outdated packages
+                    check_and_show_outdated "brew outdated --greedy --verbose" "$GREEDY_UPGRADE_INFO" "$MAGNIFY"
+                    greedy_result=$?
+                    if [[ $greedy_result -eq 2 ]]; then
+                        # No additional outdated packages
+                        upgrade_duration=0
+                        printf "%b ${CHECK_MARK} ${GREEN}No packages need upgrading (including pre-release)!${RESET}\n"
+                    elif [[ $greedy_result -eq 0 ]]; then
+                        # Show package selection for greedy
+                        show_package_selection "brew outdated --greedy" "brew upgrade --greedy"
+                        selection_result=$?
+                        if [[ $selection_result -eq 0 ]]; then
+                            # Upgrade all packages with greedy
+                            run_brew_command "brew upgrade --greedy" "$UPGRADE_GREEDY_INFO" "$UPGRADE_GREEDY_SUCCESS" "$ERROR_UPGRADE" "$BUBBLE" upgrade_duration 21
+                        elif [[ $selection_result -eq 1 ]]; then
+                            # Skip upgrade
+                            upgrade_duration=0
+                            printf "%b ${YELLOW}Upgrade skipped by user.${RESET}\n"
+                        fi
+                        # If selection_result is 3, individual package was already upgraded
+                    fi
+                    break
+                    ;;
+                2)
+                    # Skip upgrade
+                    upgrade_duration=0
+                    printf "%b ${YELLOW}Upgrade skipped by user.${RESET}\n"
+                    break
+                    ;;
+                *)
+                    printf "%b ${ERROR_SIGN} ${RED}Invalid choice. Please select 1 or 2.${RESET}\n"
+                    printf "%b ${ARROW} ${LIGHT_GREY}${NO_STABLE_CHOICE_PROMPT}${RESET}"
+                    ;;
+            esac
+        done
+    else
+        # Not macOS, just show no packages message
+        upgrade_duration=0
+        printf "%b ${CHECK_MARK} ${GREEN}No packages need upgrading!${RESET}\n"
+    fi
+elif [[ $check_result -eq 0 ]]; then
+    # Outdated packages found, ask user what to do
+    if [[ "$(uname)" == "Darwin" ]]; then
+        printf "%b ${ARROW} ${LIGHT_GREY}${UPGRADE_CHOICE_PROMPT_MACOS}${RESET}"
+    else
+        printf "%b ${ARROW} ${LIGHT_GREY}${UPGRADE_CHOICE_PROMPT_OTHER}${RESET}"
+    fi
+    
+    while true; do
+        read -r upgrade_choice
+        # Default to option 1 if empty
+        if [[ -z "$upgrade_choice" ]]; then
+            upgrade_choice=1
+        fi
+        if [[ "$(uname)" == "Darwin" ]]; then
+            # macOS - 2 options
+            case $upgrade_choice in
+                1)
+                    # Upgrade outdated packages
+                    show_package_selection "brew outdated" "brew upgrade"
+                    selection_result=$?
+                    if [[ $selection_result -eq 0 ]]; then
+                        # Upgrade all stable packages
+                        run_brew_command "brew upgrade" "$UPGRADE_INFO" "$UPGRADE_SUCCESS" "$ERROR_UPGRADE" "$BUBBLE" upgrade_duration 12
+                    elif [[ $selection_result -eq 1 ]]; then
+                        # Skip upgrade
+                        upgrade_duration=0
+                        printf "%b ${YELLOW}Upgrade skipped by user.${RESET}\n"
+                    fi
+                    # If selection_result is 3, individual package was already upgraded
+                    break
+                    ;;
+                2)
+                    # Show greedy outdated packages first
+                    check_and_show_outdated "brew outdated --greedy --verbose" "$GREEDY_UPGRADE_INFO" "$MAGNIFY"
+                    greedy_result=$?
+                    if [[ $greedy_result -eq 2 ]]; then
+                        # No additional outdated packages with greedy
+                        upgrade_duration=0
+                        printf "%b ${CHECK_MARK} ${GREEN}No additional packages found with --greedy option.${RESET}\n"
+                        printf "%b ${YELLOW}Falling back to upgrading outdated packages only.${RESET}\n"
+                        
+                        # Proceed with regular outdated packages
+                        show_package_selection "brew outdated" "brew upgrade"
+                        selection_result=$?
+                        if [[ $selection_result -eq 0 ]]; then
+                            # Upgrade all stable packages
+                            run_brew_command "brew upgrade" "$UPGRADE_INFO" "$UPGRADE_SUCCESS" "$ERROR_UPGRADE" "$BUBBLE" upgrade_duration 12
+                        elif [[ $selection_result -eq 1 ]]; then
+                            # Skip upgrade
+                            upgrade_duration=0
+                            printf "%b ${YELLOW}Upgrade skipped by user.${RESET}\n"
+                        fi
+                    elif [[ $greedy_result -eq 0 ]]; then
+                        # Both outdated and greedy packages found, offer choice
+                        handle_greedy_selection
+                    fi
+                    break
+                    ;;
+                *)
+                    printf "%b ${ERROR_SIGN} ${RED}Invalid choice. Please select 1 or 2.${RESET}\n"
+                    printf "%b ${ARROW} ${LIGHT_GREY}${UPGRADE_CHOICE_PROMPT_MACOS}${RESET}"
+                    ;;
+            esac
+        else
+            # Non-macOS - 1 option
+            case $upgrade_choice in
+                1)
+                    # Upgrade outdated packages
+                    show_package_selection "brew outdated" "brew upgrade"
+                    selection_result=$?
+                    if [[ $selection_result -eq 0 ]]; then
+                        # Upgrade all stable packages
+                        run_brew_command "brew upgrade" "$UPGRADE_INFO" "$UPGRADE_SUCCESS" "$ERROR_UPGRADE" "$BUBBLE" upgrade_duration 12
+                    elif [[ $selection_result -eq 1 ]]; then
+                        # Skip upgrade
+                        upgrade_duration=0
+                        printf "%b ${YELLOW}Upgrade skipped by user.${RESET}\n"
+                    fi
+                    # If selection_result is 3, individual package was already upgraded
+                    break
+                    ;;
+                *)
+                    printf "%b ${ERROR_SIGN} ${RED}Invalid choice. Please select 1.${RESET}\n"
+                    printf "%b ${ARROW} ${LIGHT_GREY}${UPGRADE_CHOICE_PROMPT_OTHER}${RESET}"
+                    ;;
+            esac
+        fi
+    done
 fi
+
+run_brew_command "brew cleanup" "$CLEANUP_INFO" "$CLEANUP_SUCCESS" "$ERROR_CLEANUP" "$SPONGE" cleanup_duration 15
 
 total_duration=$((update_duration + outdated_duration + upgrade_duration + cleanup_duration + prune_duration))
 printf "%b ───────────────────────────────── ${TOTAL_DURATION_LABEL}$(format_duration $total_duration)${RESET}\n" "${ORANGE}"
